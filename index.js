@@ -1,6 +1,6 @@
 const WebSocket = require('ws');
 const express = require('express');
-const https = require('https');
+const http = require('http');
 const fs = require('fs');
 const debug = require('debug')('websockets');
 const connections = new Map();
@@ -12,13 +12,15 @@ const credentials = {key: privateKey, cert: certificate};
 
 const app = express();
 
-const server = https.createServer(credentials, app);
+//const server = https.createServer(credentials, app);
+const server = http.createServer(app);
 
 const types = {
   REGISTERING: 'REGISTERING',
   CREATEOFFER: 'CREATEOFFER',
   CREATEANSWER: 'CREATEANSWER',
   ICECANDIDATE: 'ICECANDIDATE',
+  CLOSECONNECTION: 'CLOSECONNECTION'
 };
 
 const CLIENTS = {};
@@ -29,7 +31,7 @@ const addClientToChannel = (channel, client, ws) => {
   const clients = connections.get(channel) || [];
 
   ws.send(JSON.stringify({
-    to: client, 
+    to: client,
     from: 'server', 
     clients
   }));
@@ -43,7 +45,7 @@ const addClientToChannel = (channel, client, ws) => {
 
 const sendOffer = ({from, to, description, type}) => {
   debug(`sendOffer from ${from} to ${to} with description: ${description}`);
-  CLIENTS[to].send(JSON.stringify({
+  CLIENTS[to] && CLIENTS[to].send(JSON.stringify({
     to,
     from,
     description,
@@ -53,7 +55,7 @@ const sendOffer = ({from, to, description, type}) => {
 
 const sendAnswer = ({from, to, description, type}) => {
   debug(`sendAnswer from ${from} to ${to} with description: ${description}`);
-  CLIENTS[to].send(JSON.stringify({
+  CLIENTS[to] && CLIENTS[to].send(JSON.stringify({
     to,
     from,
     description,
@@ -63,10 +65,19 @@ const sendAnswer = ({from, to, description, type}) => {
 
 const sendCandidate = ({from, to, candidate, type}) => {
   debug(`sendCandidate from ${from} to ${to} with candidate: ${candidate}`);
-  CLIENTS[to].send(JSON.stringify({
+  CLIENTS[to] && CLIENTS[to].send(JSON.stringify({
     to,
     from,
     candidate,
+    type
+  }));
+};
+
+const sendCloseConnection = ({from, to, type}) => {
+  debug(`close connection between ${from} and ${to}`);
+  CLIENTS[to] && CLIENTS[to].send(JSON.stringify({
+    to,
+    from,
     type
   }));
 };
@@ -83,8 +94,11 @@ const dealWithMessage = (msg, ws) => {
     case types.CREATEANSWER:
       return sendAnswer(msg, ws);
     
-      case types.ICECANDIDATE:
+    case types.ICECANDIDATE:
       return sendCandidate(msg, ws);
+    
+    case types.CLOSECONNECTION:
+      return sendCloseConnection(msg, ws);
 
     default: 
       return;
@@ -111,7 +125,11 @@ socketServer.on('connection', ws => {
   ws.on('close', (code, reason) => {
     debug(`Close with ${code} with the ${reason}`);
     if (code === 1000) {
-      delete CLIENTS[reason];
+      const [userId, channel] = reason.split(',');
+      const clients = connections.get(channel);
+      const newClients = clients.splice(clients.indexOf(userId), 1);
+      connections.set(channel, newClients);
+      delete CLIENTS[userId];
     }
   });
 
